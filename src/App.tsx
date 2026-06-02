@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import {
-  Users, Image, Eye, TrendingUp, Heart, Bookmark, BarChart2, MousePointer, AlertCircle,
+  Users, Image, Eye, TrendingUp, Heart, Bookmark, BarChart2, MousePointer, AlertCircle, RefreshCw,
 } from 'lucide-react';
 import Header from './components/Header';
 import MetricCard from './components/MetricCard';
@@ -32,7 +32,7 @@ export default function App() {
   const [selectedPost, setSelectedPost] = useState<Post | null>(null);
   const [showSetup, setShowSetup] = useState(false);
 
-  const { posts, monthlyMetrics, account, loading, error, usingMockData } =
+  const { posts, monthlyMetrics, account, syncing, error, usingMockData } =
     useInstagramData(filters.dateRange);
 
   const filteredPosts = useMemo(() => {
@@ -80,7 +80,16 @@ export default function App() {
         profilePic={account?.profile_picture_url}
       />
 
-      {usingMockData && (
+      {syncing && (
+        <div className="bg-blue-500/10 border-b border-blue-500/20 px-6 py-1.5">
+          <div className="max-w-7xl mx-auto flex items-center gap-2 text-blue-400 text-xs">
+            <RefreshCw size={11} className="animate-spin flex-shrink-0" />
+            <span>Buscando dados reais do Instagram @ambrone...</span>
+          </div>
+        </div>
+      )}
+
+      {usingMockData && !syncing && (
         <div className="bg-amber-500/10 border-b border-amber-500/20 px-6 py-2.5">
           <div className="max-w-7xl mx-auto flex items-center justify-between">
             <div className="flex items-center gap-2 text-amber-400 text-xs">
@@ -111,12 +120,6 @@ export default function App() {
         filteredPosts={filteredPosts.length}
       />
 
-      {loading ? (
-        <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
-          <div className="w-10 h-10 rounded-full border-4 border-white/10 border-t-orange-500 animate-spin" />
-          <p className="text-white/40 text-sm">Carregando dados do Instagram...</p>
-        </div>
-      ) : (
         <main className="max-w-7xl mx-auto px-6 py-8 space-y-8">
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
             <MetricCard label="Seguidores" value={totals.lastFollowers || account?.followers_count || 0}
@@ -151,7 +154,6 @@ export default function App() {
 
           <PostGrid posts={filteredPosts} onPostClick={setSelectedPost} title="Publicações" />
         </main>
-      )}
 
       <footer className="border-t border-white/5 px-6 py-4 mt-8">
         <div className="max-w-7xl mx-auto flex items-center justify-between text-white/20 text-xs">
