@@ -39,7 +39,12 @@ export default function App() {
   const filteredPosts = useMemo(() => {
     let result = posts.filter((p) => {
       if (p.date < filters.dateRange.start || p.date > filters.dateRange.end) return false;
-      if (filters.postType !== 'all' && p.type !== filters.postType) return false;
+      if (filters.postType !== 'all') {
+        const match = filters.postType === 'video'
+          ? (p.type === 'video' || p.type === 'reel')
+          : p.type === filters.postType;
+        if (!match) return false;
+      }
       return true;
     });
     switch (filters.sortBy) {

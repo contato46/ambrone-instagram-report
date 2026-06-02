@@ -1,4 +1,4 @@
-import { Calendar, Filter, Image, Video, Film, LayoutGrid } from 'lucide-react';
+import { Calendar, Filter, Image, Film, LayoutGrid } from 'lucide-react';
 import type { DateRange, PostType } from '../types';
 
 interface DateFilterProps {
@@ -16,8 +16,7 @@ const TYPE_OPTIONS: Array<{ value: PostType | 'all'; label: string; icon: typeof
   { value: 'all', label: 'Todos', icon: LayoutGrid },
   { value: 'image', label: 'Imagens', icon: Image },
   { value: 'carousel', label: 'Carrossel', icon: LayoutGrid },
-  { value: 'reel', label: 'Reels', icon: Film },
-  { value: 'video', label: 'Vídeos', icon: Video },
+  { value: 'video', label: 'Reels', icon: Film },
 ];
 
 const SORT_OPTIONS = [

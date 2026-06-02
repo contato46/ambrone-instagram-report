@@ -23,7 +23,7 @@ export interface InstagramDataState {
 
 const TOKEN = import.meta.env.VITE_INSTAGRAM_TOKEN as string | undefined;
 const USER_ID = import.meta.env.VITE_INSTAGRAM_USER_ID as string | undefined;
-const API = 'https://graph.facebook.com/v19.0';
+const API = 'https://graph.facebook.com/v22.0';
 
 const MONTH_LABELS: Record<string, string> = {
   '01': 'Jan', '02': 'Fev', '03': 'Mar', '04': 'Abr', '05': 'Mai',
@@ -51,7 +51,7 @@ function mockForRange(dateRange: DateRange) {
 
 function buildMetrics(
   posts: Post[],
-  accountInsights: Record<string, number[]>,
+  accountInsights: Record<string, number>,
   followersByDay: Array<{ end_time: string; value: number }>,
 ): MonthlyMetrics[] {
   const map: Record<string, Post[]> = {};
@@ -66,23 +66,17 @@ function buildMetrics(
 
   return Object.entries(map).sort(([a], [b]) => a.localeCompare(b)).map(([month, mp]) => {
     const [year, m] = month.split('-');
-    const reach = (accountInsights.reach || []).reduce((s, v) => s + v, 0);
-    const impressions = (accountInsights.impressions || []).reduce((s, v) => s + v, 0);
-    const profileVisits = (accountInsights.profile_views || []).reduce((s, v) => s + v, 0);
-    const websiteClicks = (accountInsights.website_clicks || []).reduce((s, v) => s + v, 0);
+    const profileVisits = accountInsights.profile_views ?? 0;
+    const websiteClicks = accountInsights.website_clicks ?? 0;
     const eng = mp.reduce((s, p) => s + p.likes + p.comments + p.saves + p.shares, 0);
     const postReach = mp.reduce((s, p) => s + p.reach, 0);
-    const finalReach = reach || postReach;
     const followers = followerByMonth[month]?.length
-      ? followerByMonth[month][followerByMonth[month].length - 1]
-      : 0;
+      ? followerByMonth[month][followerByMonth[month].length - 1] : 0;
     return {
       month, label: `${MONTH_LABELS[m]}/${year.slice(2)}`,
       followers, followersGained: 0, posts: mp.length,
-      reach: finalReach,
-      impressions: impressions || mp.reduce((s, p) => s + p.impressions, 0),
-      engagement: eng,
-      engagementRate: finalReach > 0 ? parseFloat(((eng / finalReach) * 100).toFixed(1)) : 0,
+      reach: postReach, impressions: 0, engagement: eng,
+      engagementRate: postReach > 0 ? parseFloat(((eng / postReach) * 100).toFixed(1)) : 0,
       profileVisits, websiteClicks,
     };
   });
@@ -173,13 +167,11 @@ export function useInstagramData(dateRange: DateRange) {
         // Show posts immediately (without insights yet)
         setState((s) => ({ ...s, posts: basicPosts, usingMockData: false }));
 
-        // 2. Post insights in parallel (one call per post, fast for 28 days)
+        // 2. Post insights in parallel — v22+ removed impressions; use reach,saved,shares
         const insightResults: Record<string, Record<string, number>> = {};
         await Promise.all(basicPosts.map(async (post) => {
           const isVideo = post.type === 'video' || post.type === 'reel';
-          const metrics = isVideo
-            ? 'reach,impressions,saved,shares,plays'
-            : 'reach,impressions,saved,shares';
+          const metrics = isVideo ? 'reach,saved,shares,plays' : 'reach,saved,shares';
           try {
             const res = await tFetch(
               `${API}/${post.id}/insights?metric=${metrics}&access_token=${TOKEN}`, 6000,
@@ -208,19 +200,25 @@ export function useInstagramData(dateRange: DateRange) {
 
         setState((s) => ({ ...s, posts: enrichedPosts }));
 
-        // 3. Account insights + follower count in parallel
+        // 3. Account insights + follower count
+        // v22+: profile_views/website_clicks need metric_type=total_value → returns total_value.value
+        // follower_count: only last 30 days, until must be before today
         const since = toUnix(dateRange.start);
-        const until = toUnix(dateRange.end) + 86400;
+        const nowUnix = Math.floor(Date.now() / 1000);
+        const yesterday = nowUnix - 86400;
+        const until = Math.min(toUnix(dateRange.end) + 86400, yesterday);
+
         const [accInsRes, followerRes] = await Promise.all([
-          tFetch(`${API}/${USER_ID}/insights?metric=profile_views,website_clicks&period=day&since=${since}&until=${until}&access_token=${TOKEN}`, 8000),
+          tFetch(`${API}/${USER_ID}/insights?metric=profile_views,website_clicks&period=day&metric_type=total_value&since=${since}&until=${until}&access_token=${TOKEN}`, 8000),
           tFetch(`${API}/${USER_ID}/insights?metric=follower_count&period=day&since=${since}&until=${until}&access_token=${TOKEN}`, 8000),
         ]);
 
-        const accountInsights: Record<string, number[]> = {};
+        // v22 format: { data: [{ name, total_value: { value } }] }
+        const accountInsights: Record<string, number> = {};
         if (accInsRes.ok) {
-          const d = await accInsRes.json() as { data: Array<{ name: string; values: Array<{ value: number }> }> };
+          const d = await accInsRes.json() as { data: Array<{ name: string; total_value?: { value: number }; values?: Array<{ value: number }> }> };
           for (const m of d.data || []) {
-            accountInsights[m.name] = (m.values || []).map((v) => v.value);
+            accountInsights[m.name] = m.total_value?.value ?? m.values?.reduce((s, v) => s + v.value, 0) ?? 0;
           }
         }
 
