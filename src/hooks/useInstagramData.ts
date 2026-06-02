@@ -23,9 +23,6 @@ interface InstagramDataState {
   usingMockData: boolean;
 }
 
-const IS_DEV = import.meta.env.DEV;
-const USE_MOCK = IS_DEV || import.meta.env.VITE_USE_MOCK === 'true';
-
 function parseMediaType(type: string): Post['type'] {
   if (type === 'CAROUSEL_ALBUM') return 'carousel';
   if (type === 'VIDEO') return 'video';
@@ -82,58 +79,97 @@ function buildMonthlyMetrics(
     });
 }
 
+function useMockData(): InstagramDataState {
+  return {
+    posts: ALL_POSTS,
+    monthlyMetrics: MONTHLY_METRICS,
+    account: null,
+    loading: false,
+    loadingMessage: '',
+    loadingProgress: 100,
+    error: null,
+    usingMockData: true,
+  };
+}
+
+async function fetchWithTimeout(input: RequestInfo, init?: RequestInit, timeoutMs = 8000): Promise<Response> {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(input, { ...init, signal: controller.signal });
+    return res;
+  } finally {
+    clearTimeout(id);
+  }
+}
+
 export function useInstagramData(dateRange: DateRange) {
   const [state, setState] = useState<InstagramDataState>({
     posts: [],
     monthlyMetrics: [],
     account: null,
     loading: true,
-    loadingMessage: 'Iniciando...',
+    loadingMessage: 'Verificando configuração...',
     loadingProgress: 0,
     error: null,
-    usingMockData: USE_MOCK,
+    usingMockData: false,
   });
 
-  const fetchRealData = useCallback(async () => {
+  const load = useCallback(async () => {
+    setState((s) => ({ ...s, loading: true, loadingMessage: 'Verificando configuração...', loadingProgress: 5 }));
+
     try {
-      setState((s) => ({ ...s, loading: true, loadingMessage: 'Buscando dados da conta...', loadingProgress: 5 }));
+      const statusRes = await fetchWithTimeout('/api/status', undefined, 4000);
+      if (!statusRes.ok) throw new Error('status endpoint not available');
+      const status = await statusRes.json() as { configured: boolean };
 
-      const [accountRes] = await Promise.all([
-        fetch('/api/account'),
-      ]);
-
-      if (!accountRes.ok) {
-        const err = await accountRes.json() as { error: unknown };
-        throw new Error(`Erro na API: ${JSON.stringify(err.error)}`);
+      if (!status.configured) {
+        setState(useMockData());
+        return;
       }
+    } catch {
+      setState(useMockData());
+      return;
+    }
 
+    try {
+      setState((s) => ({ ...s, loadingMessage: 'Buscando dados da conta...', loadingProgress: 10 }));
+
+      const accountRes = await fetchWithTimeout('/api/account', undefined, 8000);
+      if (!accountRes.ok) throw new Error('account fetch failed');
       const accountData = await accountRes.json() as AccountInfo;
-      setState((s) => ({ ...s, account: accountData, loadingMessage: 'Buscando publicações...', loadingProgress: 20 }));
 
-      const postsRes = await fetch(`/api/posts?since=${dateRange.start}&until=${dateRange.end}`);
-      if (!postsRes.ok) throw new Error('Erro ao buscar posts');
+      setState((s) => ({ ...s, account: accountData, loadingMessage: 'Buscando publicações...', loadingProgress: 25 }));
 
-      const postsData = await postsRes.json() as { data: Array<{
-        id: string; caption?: string; media_type: string; media_url?: string;
-        thumbnail_url?: string; timestamp: string; permalink: string;
-        like_count: number; comments_count: number;
-      }>; total: number };
+      const postsRes = await fetchWithTimeout(
+        `/api/posts?since=${dateRange.start}&until=${dateRange.end}`, undefined, 30000,
+      );
+      if (!postsRes.ok) throw new Error('posts fetch failed');
+      const postsData = await postsRes.json() as {
+        data: Array<{
+          id: string; caption?: string; media_type: string; media_url?: string;
+          thumbnail_url?: string; timestamp: string; permalink: string;
+          like_count: number; comments_count: number;
+        }>;
+        total: number;
+      };
 
-      setState((s) => ({ ...s, loadingMessage: 'Buscando métricas dos posts...', loadingProgress: 45 }));
+      setState((s) => ({ ...s, loadingMessage: 'Buscando métricas dos posts...', loadingProgress: 50 }));
 
-      const insightsRes = await fetch('/api/post-insights', {
+      const insightsRes = await fetchWithTimeout('/api/post-insights', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(postsData.data.map((p) => ({ id: p.id, type: p.media_type }))),
-      });
-
+      }, 30000);
       const insightsData = await insightsRes.json() as Record<string, Record<string, number>>;
 
-      setState((s) => ({ ...s, loadingMessage: 'Calculando métricas mensais...', loadingProgress: 70 }));
+      setState((s) => ({ ...s, loadingMessage: 'Calculando métricas mensais...', loadingProgress: 75 }));
 
-      const monthlyRes = await fetch(`/api/monthly-insights?since=${dateRange.start}&until=${dateRange.end}`);
+      const monthlyRes = await fetchWithTimeout(
+        `/api/monthly-insights?since=${dateRange.start}&until=${dateRange.end}`, undefined, 15000,
+      );
       const monthlyData = await monthlyRes.json() as {
-        insights: { data: Array<{ name: string; period: string; values: Array<{ end_time: string; value: number }> }> };
+        insights: { data: Array<{ name: string; values: Array<{ end_time: string; value: number }> }> };
         followers: { data: Array<{ name: string; values: Array<{ end_time: string; value: number }> }> };
       };
 
@@ -173,7 +209,9 @@ export function useInstagramData(dateRange: DateRange) {
         for (const metric of monthlyData.insights.data) {
           for (const val of metric.values) {
             const month = val.end_time.slice(0, 7);
-            if (!monthlyInsightsMap[month]) monthlyInsightsMap[month] = { reach: 0, impressions: 0, profile_views: 0, website_clicks: 0 };
+            if (!monthlyInsightsMap[month]) {
+              monthlyInsightsMap[month] = { reach: 0, impressions: 0, profile_views: 0, website_clicks: 0 };
+            }
             if (metric.name === 'reach') monthlyInsightsMap[month].reach = val.value;
             if (metric.name === 'impressions') monthlyInsightsMap[month].impressions = val.value;
             if (metric.name === 'profile_views') monthlyInsightsMap[month].profile_views = val.value;
@@ -197,38 +235,13 @@ export function useInstagramData(dateRange: DateRange) {
       });
     } catch (err) {
       console.error('Instagram API error, falling back to mock data:', err);
-      setState({
-        posts: ALL_POSTS,
-        monthlyMetrics: MONTHLY_METRICS,
-        account: null,
-        loading: false,
-        loadingMessage: '',
-        loadingProgress: 100,
-        error: String(err),
-        usingMockData: true,
-      });
+      setState({ ...useMockData(), error: String(err) });
     }
   }, [dateRange.start, dateRange.end]);
 
   useEffect(() => {
-    if (USE_MOCK) {
-      const timer = setTimeout(() => {
-        setState({
-          posts: ALL_POSTS,
-          monthlyMetrics: MONTHLY_METRICS,
-          account: null,
-          loading: false,
-          loadingMessage: '',
-          loadingProgress: 100,
-          error: null,
-          usingMockData: true,
-        });
-      }, 800);
-      return () => clearTimeout(timer);
-    } else {
-      fetchRealData();
-    }
-  }, [fetchRealData]);
+    load();
+  }, [load]);
 
   return state;
 }
