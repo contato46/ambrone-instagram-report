@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import {
-  Users, Image, Eye, TrendingUp, Heart, Bookmark, BarChart2, MousePointer, AlertCircle, RefreshCw,
+  Users, Image, Eye, TrendingUp, Heart, Bookmark, MousePointer, AlertCircle, RefreshCw, Share2,
 } from 'lucide-react';
 import Header from './components/Header';
 import MetricCard from './components/MetricCard';
@@ -11,29 +11,28 @@ import FollowersChart from './components/charts/FollowersChart';
 import ReachChart from './components/charts/ReachChart';
 import EngagementChart from './components/charts/EngagementChart';
 import ContentTypeChart from './components/charts/ContentTypeChart';
-import SetupGuide from './components/SetupGuide';
 import Demographics from './components/Demographics';
+import SetupGuide from './components/SetupGuide';
 import { useInstagramData } from './hooks/useInstagramData';
 import type { DateRange, FilterState, Post } from './types';
 
-function getLast28Days(): DateRange {
-  const end = new Date();
-  const start = new Date();
-  start.setDate(end.getDate() - 27);
+function getLast30Days(): DateRange {
+  const end = new Date(); const start = new Date();
+  start.setDate(end.getDate() - 29);
   const fmt = (d: Date) => d.toISOString().slice(0, 10);
   return { start: fmt(start), end: fmt(end) };
 }
 
 export default function App() {
   const [filters, setFilters] = useState<FilterState>({
-    dateRange: getLast28Days(),
+    dateRange: getLast30Days(),
     postType: 'all',
     sortBy: 'date',
   });
   const [selectedPost, setSelectedPost] = useState<Post | null>(null);
   const [showSetup, setShowSetup] = useState(false);
 
-  const { posts, monthlyMetrics, account, demographics, syncing, error, usingMockData } =
+  const { posts, monthlyMetrics, account, demographics, followerTimeline, syncing, error, usingMockData } =
     useInstagramData(filters.dateRange);
 
   const filteredPosts = useMemo(() => {
@@ -60,25 +59,21 @@ export default function App() {
     const totalLikes = filteredPosts.reduce((s, p) => s + p.likes, 0);
     const totalComments = filteredPosts.reduce((s, p) => s + p.comments, 0);
     const totalSaves = filteredPosts.reduce((s, p) => s + p.saves, 0);
-    const totalReach = monthlyMetrics.reduce((s, m) => s + m.reach, 0);
-    const totalImpressions = monthlyMetrics.reduce((s, m) => s + m.impressions, 0);
-    const totalEngagement = monthlyMetrics.reduce((s, m) => s + m.engagement, 0);
+    const totalShares = filteredPosts.reduce((s, p) => s + p.shares, 0);
+    const totalReach = filteredPosts.reduce((s, p) => s + p.reach, 0);
     const totalProfileVisits = monthlyMetrics.reduce((s, m) => s + m.profileVisits, 0);
-    const totalWebClicks = monthlyMetrics.reduce((s, m) => s + m.websiteClicks, 0);
-    const lastFollowers = account?.followers_count || 0;
-    const avgEngRate = monthlyMetrics.length > 0
-      ? monthlyMetrics.reduce((s, m) => s + m.engagementRate, 0) / monthlyMetrics.length : 0;
-    return {
-      totalLikes, totalComments, totalSaves, totalReach, totalImpressions,
-      totalEngagement, totalProfileVisits, totalWebClicks, lastFollowers, avgEngRate,
-    };
-  }, [monthlyMetrics, filteredPosts, account]);
+    const totalEngagement = filteredPosts.reduce((s, p) => s + p.likes + p.comments + p.saves + p.shares, 0);
+    const followers = account?.followers_count || 0;
+    const avgEngRate = totalReach > 0
+      ? parseFloat(((totalEngagement / totalReach) * 100).toFixed(1)) : 0;
+    return { totalLikes, totalComments, totalSaves, totalShares, totalReach, totalProfileVisits, totalEngagement, followers, avgEngRate };
+  }, [filteredPosts, monthlyMetrics, account]);
 
   return (
     <div className="min-h-screen bg-[#0f0f0f]">
       <Header
         username={account?.username}
-        followers={totals.lastFollowers}
+        followers={totals.followers}
         profilePic={account?.profile_picture_url}
       />
 
@@ -86,7 +81,7 @@ export default function App() {
         <div className="bg-blue-500/10 border-b border-blue-500/20 px-6 py-1.5">
           <div className="max-w-7xl mx-auto flex items-center gap-2 text-blue-400 text-xs">
             <RefreshCw size={11} className="animate-spin flex-shrink-0" />
-            <span>Buscando dados reais do @ambrone...</span>
+            <span>Buscando dados do @ambrone...</span>
           </div>
         </div>
       )}
@@ -120,34 +115,39 @@ export default function App() {
       />
 
       <main className="max-w-7xl mx-auto px-6 py-8 space-y-8">
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-          <MetricCard label="Seguidores" value={totals.lastFollowers} icon={Users} iconColor="text-orange-400" subValue="total na conta" />
+        {/* Metric cards */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+          <MetricCard label="Seguidores" value={totals.followers} icon={Users} iconColor="text-orange-400" subValue="total na conta" />
           <MetricCard label="Posts" value={filteredPosts.length} icon={Image} iconColor="text-purple-400" subValue="no período" />
-          <MetricCard label="Curtidas" value={totals.totalLikes} icon={Heart} iconColor="text-pink-400" />
-          <MetricCard label="Comentários" value={totals.totalComments} icon={BarChart2} iconColor="text-blue-400" />
           <MetricCard label="Alcance" value={totals.totalReach} icon={Eye} iconColor="text-cyan-400" />
-          <MetricCard label="Impressões" value={totals.totalImpressions} icon={BarChart2} iconColor="text-indigo-400" />
+          <MetricCard label="Curtidas" value={totals.totalLikes} icon={Heart} iconColor="text-pink-400" />
+          <MetricCard label="Comentários" value={totals.totalComments} icon={Eye} iconColor="text-blue-400" />
           <MetricCard label="Salvamentos" value={totals.totalSaves} icon={Bookmark} iconColor="text-yellow-400" />
-          <MetricCard label="Taxa de Eng." value={totals.avgEngRate} format="percent" icon={TrendingUp} iconColor="text-emerald-400" />
-          <MetricCard label="Visitas Perfil" value={totals.totalProfileVisits} icon={Users} iconColor="text-violet-400" />
-          <MetricCard label="Cliques Site" value={totals.totalWebClicks} icon={MousePointer} iconColor="text-teal-400" />
+          <MetricCard label="Compartilhamentos" value={totals.totalShares} icon={Share2} iconColor="text-emerald-400" />
+          <MetricCard label="Taxa de Eng." value={totals.avgEngRate} format="percent" icon={TrendingUp} iconColor="text-violet-400" />
+          <MetricCard label="Visitas ao Perfil" value={totals.totalProfileVisits} icon={MousePointer} iconColor="text-indigo-400" />
+        </div>
+
+        {/* Charts */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <FollowersChart
+            timeline={followerTimeline}
+            currentFollowers={totals.followers}
+          />
+          <ReachChart data={monthlyMetrics} />
         </div>
 
         {monthlyMetrics.length > 0 && (
-          <>
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-              <FollowersChart data={monthlyMetrics} />
-              <ReachChart data={monthlyMetrics} />
-            </div>
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-              <div className="lg:col-span-2"><EngagementChart data={monthlyMetrics} /></div>
-              <ContentTypeChart posts={filteredPosts} />
-            </div>
-          </>
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="lg:col-span-2"><EngagementChart data={monthlyMetrics} /></div>
+            <ContentTypeChart posts={filteredPosts} />
+          </div>
         )}
 
-          {demographics && <Demographics data={demographics} />}
+        {/* Demographics */}
+        {demographics && <Demographics data={demographics} />}
 
+        {/* Posts grid */}
         <PostGrid posts={filteredPosts} onPostClick={setSelectedPost} title="Publicações" />
       </main>
 
