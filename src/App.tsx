@@ -15,17 +15,17 @@ import SetupGuide from './components/SetupGuide';
 import { useInstagramData } from './hooks/useInstagramData';
 import type { DateRange, FilterState, Post } from './types';
 
-function getCurrentMonthRange(): DateRange {
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, '0');
-  const lastDay = new Date(y, now.getMonth() + 1, 0).getDate();
-  return { start: `${y}-${m}-01`, end: `${y}-${m}-${lastDay}` };
+function getLast7Days(): DateRange {
+  const end = new Date();
+  const start = new Date();
+  start.setDate(end.getDate() - 6);
+  const fmt = (d: Date) => d.toISOString().slice(0, 10);
+  return { start: fmt(start), end: fmt(end) };
 }
 
 export default function App() {
   const [filters, setFilters] = useState<FilterState>({
-    dateRange: getCurrentMonthRange(),
+    dateRange: getLast7Days(),
     postType: 'all',
     sortBy: 'date',
   });

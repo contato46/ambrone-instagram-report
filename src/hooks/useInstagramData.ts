@@ -21,6 +21,15 @@ export interface InstagramDataState {
   usingMockData: boolean;
 }
 
+const TOKEN = import.meta.env.VITE_INSTAGRAM_TOKEN as string | undefined;
+const USER_ID = import.meta.env.VITE_INSTAGRAM_USER_ID as string | undefined;
+const API = 'https://graph.facebook.com/v19.0';
+
+const MONTH_LABELS: Record<string, string> = {
+  '01': 'Jan', '02': 'Fev', '03': 'Mar', '04': 'Abr', '05': 'Mai',
+  '06': 'Jun', '07': 'Jul', '08': 'Ago', '09': 'Set', '10': 'Out', '11': 'Nov', '12': 'Dez',
+};
+
 function parseMediaType(type: string): Post['type'] {
   if (type === 'CAROUSEL_ALBUM') return 'carousel';
   if (type === 'VIDEO') return 'video';
@@ -28,20 +37,26 @@ function parseMediaType(type: string): Post['type'] {
   return 'image';
 }
 
-async function fetchWithTimeout(input: RequestInfo, init?: RequestInit, ms = 12000): Promise<Response> {
-  const ctrl = new AbortController();
-  const id = setTimeout(() => ctrl.abort(), ms);
-  try {
-    return await fetch(input, { ...init, signal: ctrl.signal });
-  } finally {
-    clearTimeout(id);
-  }
+function buildMetrics(posts: Post[]): MonthlyMetrics[] {
+  const map: Record<string, Post[]> = {};
+  posts.forEach((p) => { const m = p.date.slice(0, 7); if (!map[m]) map[m] = []; map[m].push(p); });
+  return Object.entries(map).sort(([a], [b]) => a.localeCompare(b)).map(([month, mPosts]) => {
+    const [year, m] = month.split('-');
+    const eng = mPosts.reduce((s, p) => s + p.likes + p.comments, 0);
+    return {
+      month, label: `${MONTH_LABELS[m]}/${year.slice(2)}`,
+      followers: 0, followersGained: 0, posts: mPosts.length,
+      reach: 0, impressions: 0, engagement: eng, engagementRate: 0,
+      profileVisits: 0, websiteClicks: 0,
+    };
+  });
 }
 
-const MONTH_LABELS: Record<string, string> = {
-  '01': 'Jan', '02': 'Fev', '03': 'Mar', '04': 'Abr', '05': 'Mai',
-  '06': 'Jun', '07': 'Jul', '08': 'Ago', '09': 'Set', '10': 'Out', '11': 'Nov', '12': 'Dez',
-};
+function filterMockByDate(dateRange: DateRange): MonthlyMetrics[] {
+  return MONTHLY_METRICS.filter(
+    (m) => m.month >= dateRange.start.slice(0, 7) && m.month <= dateRange.end.slice(0, 7),
+  );
+}
 
 export function useInstagramData(dateRange: DateRange) {
   const [state, setState] = useState<InstagramDataState>({
@@ -52,34 +67,28 @@ export function useInstagramData(dateRange: DateRange) {
   const load = useCallback(async () => {
     setState((s) => ({ ...s, loading: true, error: null }));
 
-    // 1. Check if API is configured
-    try {
-      const res = await fetchWithTimeout('/api/status', undefined, 4000);
-      const json = await res.json() as { configured?: boolean };
-      if (!json.configured) {
-        setState({ posts: ALL_POSTS, monthlyMetrics: filterMock(dateRange), account: null, loading: false, error: null, usingMockData: true });
-        return;
-      }
-    } catch {
-      setState({ posts: ALL_POSTS, monthlyMetrics: filterMock(dateRange), account: null, loading: false, error: null, usingMockData: true });
+    if (!TOKEN || !USER_ID) {
+      const mockPosts = ALL_POSTS.filter(
+        (p) => p.date >= dateRange.start && p.date <= dateRange.end,
+      );
+      setState({
+        posts: mockPosts, monthlyMetrics: filterMockByDate(dateRange),
+        account: null, loading: false, error: null, usingMockData: true,
+      });
       return;
     }
 
-    // 2. Fetch account
     try {
-      const accountRes = await fetchWithTimeout('/api/account', undefined, 8000);
-      if (accountRes.ok) {
-        const account = await accountRes.json() as AccountInfo;
-        setState((s) => ({ ...s, account }));
-      }
-    } catch { /* non-fatal */ }
+      // Fetch account + posts in parallel
+      const [accountRes, postsRes] = await Promise.all([
+        fetch(`${API}/${USER_ID}?fields=id,name,username,profile_picture_url,followers_count,media_count&access_token=${TOKEN}`),
+        fetch(`${API}/${USER_ID}/media?fields=id,caption,media_type,media_url,thumbnail_url,timestamp,permalink,like_count,comments_count&limit=50&access_token=${TOKEN}`),
+      ]);
 
-    // 3. Fetch posts for the selected period
-    try {
-      const postsRes = await fetchWithTimeout(
-        `/api/posts?since=${dateRange.start}&until=${dateRange.end}`, undefined, 20000,
-      );
-      if (!postsRes.ok) throw new Error('posts error');
+      const account = accountRes.ok ? await accountRes.json() as AccountInfo : null;
+      setState((s) => ({ ...s, account: account || s.account }));
+
+      if (!postsRes.ok) throw new Error('Erro ao buscar posts');
       const postsData = await postsRes.json() as {
         data: Array<{
           id: string; caption?: string; media_type: string;
@@ -87,125 +96,66 @@ export function useInstagramData(dateRange: DateRange) {
           timestamp: string; permalink: string;
           like_count: number; comments_count: number;
         }>;
+        paging?: { next?: string };
       };
 
-      // 4. Fetch insights for these posts (fast for 1 month = ~20-30 posts)
-      let insightsData: Record<string, Record<string, number>> = {};
-      try {
-        const insRes = await fetchWithTimeout('/api/post-insights', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(postsData.data.map((p) => ({ id: p.id, type: p.media_type }))),
-        }, 20000);
-        if (insRes.ok) insightsData = await insRes.json() as typeof insightsData;
-      } catch { /* use basic data */ }
+      // Filter to date range
+      const filtered = postsData.data.filter((p) => {
+        const d = p.timestamp.slice(0, 10);
+        return d >= dateRange.start && d <= dateRange.end;
+      });
 
-      const posts: Post[] = postsData.data.map((item) => {
+      // If there's a next page and we haven't reached the start date yet, fetch it
+      let allItems = [...filtered];
+      if (
+        postsData.paging?.next &&
+        postsData.data.length > 0 &&
+        postsData.data[postsData.data.length - 1].timestamp.slice(0, 10) >= dateRange.start
+      ) {
+        try {
+          const page2Res = await fetch(postsData.paging.next);
+          if (page2Res.ok) {
+            const page2 = await page2Res.json() as typeof postsData;
+            const page2Filtered = page2.data.filter((p) => {
+              const d = p.timestamp.slice(0, 10);
+              return d >= dateRange.start && d <= dateRange.end;
+            });
+            allItems = [...allItems, ...page2Filtered];
+          }
+        } catch { /* ignore pagination errors */ }
+      }
+
+      const posts: Post[] = allItems.map((item) => {
         const type = parseMediaType(item.media_type);
-        const m = insightsData[item.id] || {};
-        const likes = item.like_count || 0;
-        const comments = item.comments_count || 0;
-        const saves = m.saved || 0;
-        const shares = m.shares || 0;
-        const reach = m.reach || 0;
-        const impressions = m.impressions || 0;
-        const plays = m.plays || m.video_views;
-        const eng = likes + comments + saves + shares;
         return {
           id: item.id, date: item.timestamp.slice(0, 10), type,
           caption: item.caption || '',
           thumbnail: (type === 'video' || type === 'reel')
             ? (item.thumbnail_url || item.media_url || '')
             : (item.media_url || ''),
-          likes, comments, saves, shares, reach, impressions, plays,
-          engagementRate: reach > 0 ? parseFloat(((eng / reach) * 100).toFixed(1)) : 0,
+          likes: item.like_count || 0,
+          comments: item.comments_count || 0,
+          saves: 0, shares: 0, reach: 0, impressions: 0, plays: undefined,
+          engagementRate: 0,
         };
       });
 
-      // 5. Fetch monthly metrics
-      let monthlyMetrics: MonthlyMetrics[] = buildBasicMetrics(posts);
-      try {
-        const mRes = await fetchWithTimeout(
-          `/api/monthly-insights?since=${dateRange.start}&until=${dateRange.end}`, undefined, 12000,
-        );
-        if (mRes.ok) {
-          const mData = await mRes.json() as {
-            insights: { data: Array<{ name: string; values: Array<{ end_time: string; value: number }> }> };
-            followers: { data: Array<{ name: string; values: Array<{ end_time: string; value: number }> }> };
-          };
-          monthlyMetrics = mergeMonthlyMetrics(posts, mData);
-        }
-      } catch { /* use basic */ }
-
-      setState((s) => ({ ...s, posts, monthlyMetrics, loading: false, usingMockData: false }));
+      setState({
+        posts, monthlyMetrics: buildMetrics(posts),
+        account, loading: false, error: null, usingMockData: false,
+      });
     } catch (err) {
-      setState({ posts: ALL_POSTS, monthlyMetrics: filterMock(dateRange), account: null, loading: false, error: String(err), usingMockData: true });
+      const mockPosts = ALL_POSTS.filter(
+        (p) => p.date >= dateRange.start && p.date <= dateRange.end,
+      );
+      setState({
+        posts: mockPosts, monthlyMetrics: filterMockByDate(dateRange),
+        account: null, loading: false, error: String(err), usingMockData: true,
+      });
     }
   }, [dateRange.start, dateRange.end]);
 
   useEffect(() => { load(); }, [load]);
 
   return state;
-}
-
-function filterMock(dateRange: DateRange): MonthlyMetrics[] {
-  return MONTHLY_METRICS.filter(
-    (m) => m.month >= dateRange.start.slice(0, 7) && m.month <= dateRange.end.slice(0, 7),
-  );
-}
-
-function buildBasicMetrics(posts: Post[]): MonthlyMetrics[] {
-  const map: Record<string, Post[]> = {};
-  posts.forEach((p) => { const m = p.date.slice(0, 7); if (!map[m]) map[m] = []; map[m].push(p); });
-  return Object.entries(map).sort(([a], [b]) => a.localeCompare(b)).map(([month, mPosts]) => {
-    const [year, m] = month.split('-');
-    const eng = mPosts.reduce((s, p) => s + p.likes + p.comments + p.saves + p.shares, 0);
-    return {
-      month, label: `${MONTH_LABELS[m]}/${year.slice(2)}`,
-      followers: 0, followersGained: 0, posts: mPosts.length,
-      reach: mPosts.reduce((s, p) => s + p.reach, 0),
-      impressions: mPosts.reduce((s, p) => s + p.impressions, 0),
-      engagement: eng, engagementRate: 0, profileVisits: 0, websiteClicks: 0,
-    };
-  });
-}
-
-function mergeMonthlyMetrics(
-  posts: Post[],
-  mData: {
-    insights: { data: Array<{ name: string; values: Array<{ end_time: string; value: number }> }> };
-    followers: { data: Array<{ name: string; values: Array<{ end_time: string; value: number }> }> };
-  },
-): MonthlyMetrics[] {
-  const insMap: Record<string, Record<string, number>> = {};
-  for (const metric of (mData.insights?.data || [])) {
-    for (const val of metric.values) {
-      const mo = val.end_time.slice(0, 7);
-      if (!insMap[mo]) insMap[mo] = {};
-      insMap[mo][metric.name] = val.value;
-    }
-  }
-  const followersByMonth: Record<string, number[]> = {};
-  for (const val of (mData.followers?.data?.[0]?.values || [])) {
-    const mo = val.end_time.slice(0, 7);
-    if (!followersByMonth[mo]) followersByMonth[mo] = [];
-    followersByMonth[mo].push(val.value);
-  }
-  const map: Record<string, Post[]> = {};
-  posts.forEach((p) => { const m = p.date.slice(0, 7); if (!map[m]) map[m] = []; map[m].push(p); });
-  return Object.entries(map).sort(([a], [b]) => a.localeCompare(b)).map(([month, mPosts]) => {
-    const [year, m] = month.split('-');
-    const ins = insMap[month] || {};
-    const eng = mPosts.reduce((s, p) => s + p.likes + p.comments + p.saves + p.shares, 0);
-    const reach = ins.reach || mPosts.reduce((s, p) => s + p.reach, 0);
-    const followers = followersByMonth[month]?.length ? Math.max(...followersByMonth[month]) : 0;
-    return {
-      month, label: `${MONTH_LABELS[m]}/${year.slice(2)}`,
-      followers, followersGained: 0, posts: mPosts.length,
-      reach, impressions: ins.impressions || 0,
-      engagement: eng,
-      engagementRate: reach > 0 ? parseFloat(((eng / reach) * 100).toFixed(1)) : 0,
-      profileVisits: ins.profile_views || 0, websiteClicks: ins.website_clicks || 0,
-    };
-  });
 }

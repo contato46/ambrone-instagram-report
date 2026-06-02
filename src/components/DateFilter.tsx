@@ -59,7 +59,6 @@ export default function DateFilter({
             type="date"
             value={dateRange.end}
             min={dateRange.start}
-            max="2026-05-31"
             onChange={(e) => onDateChange({ ...dateRange, end: e.target.value })}
             className="bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-white/80 text-sm focus:outline-none focus:border-orange-500/50"
           />
