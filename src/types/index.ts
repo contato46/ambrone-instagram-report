@@ -40,3 +40,10 @@ export interface FilterState {
   postType: PostType | 'all';
   sortBy: 'date' | 'likes' | 'reach' | 'engagement';
 }
+
+export interface DemographicsData {
+  ageGender: Array<{ age: string; M: number; F: number; U: number; total: number }>;
+  genderTotal: { M: number; F: number; U: number };
+  topCities: Array<{ name: string; value: number }>;
+  topCountries: Array<{ name: string; value: number }>;
+}

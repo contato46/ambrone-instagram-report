@@ -138,13 +138,13 @@ function generatePosts(): Post[] {
   MONTHS_DATA.forEach((month) => {
     const [year, monthNum] = month.month.split('-').map(Number);
     const daysInMonth = new Date(year, monthNum, 0).getDate();
-    const postDates: number[] = [];
 
-    while (postDates.length < month.posts) {
-      const day = randomBetween(1, daysInMonth, postIndex * 100 + postDates.length);
-      if (!postDates.includes(day)) postDates.push(day);
-    }
-    postDates.sort((a, b) => a - b);
+    // Distribute posts evenly across the month — no loops, no random, no freeze risk
+    const step = daysInMonth / (month.posts + 1);
+    const postDates = Array.from({ length: month.posts }, (_, i) =>
+      Math.min(Math.round(step * (i + 1)), daysInMonth),
+    ).filter((d, i, arr) => arr.indexOf(d) === i);
+
 
     postDates.forEach((day, i) => {
       const seed = postIndex * 17 + i * 7;
