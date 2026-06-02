@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import {
-  Users, Image, Eye, TrendingUp, Heart, Bookmark, BarChart2, MousePointer, AlertCircle,
+  Users, Image, Eye, TrendingUp, Heart, Bookmark, BarChart2, MousePointer, AlertCircle, RefreshCw,
 } from 'lucide-react';
 import Header from './components/Header';
 import MetricCard from './components/MetricCard';
@@ -11,7 +11,6 @@ import FollowersChart from './components/charts/FollowersChart';
 import ReachChart from './components/charts/ReachChart';
 import EngagementChart from './components/charts/EngagementChart';
 import ContentTypeChart from './components/charts/ContentTypeChart';
-import LoadingState from './components/LoadingState';
 import SetupGuide from './components/SetupGuide';
 import { useInstagramData } from './hooks/useInstagramData';
 import type { DateRange, FilterState, Post } from './types';
@@ -27,7 +26,7 @@ export default function App() {
   const [selectedPost, setSelectedPost] = useState<Post | null>(null);
   const [showSetup, setShowSetup] = useState(false);
 
-  const { posts, monthlyMetrics, account, loading, loadingMessage, loadingProgress, error, usingMockData } =
+  const { posts, monthlyMetrics, account, syncing, syncMessage, error, usingMockData } =
     useInstagramData(filters.dateRange);
 
   const filteredPosts = useMemo(() => {
@@ -36,14 +35,12 @@ export default function App() {
       if (filters.postType !== 'all' && p.type !== filters.postType) return false;
       return true;
     });
-
     switch (filters.sortBy) {
       case 'likes': result = [...result].sort((a, b) => b.likes - a.likes); break;
       case 'reach': result = [...result].sort((a, b) => b.reach - a.reach); break;
       case 'engagement': result = [...result].sort((a, b) => b.engagementRate - a.engagementRate); break;
       default: result = [...result].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
     }
-
     return result;
   }, [posts, filters]);
 
@@ -62,27 +59,19 @@ export default function App() {
     const totalWebClicks = filteredMetrics.reduce((s, m) => s + m.websiteClicks, 0);
     const totalLikes = filteredPosts.reduce((s, p) => s + p.likes, 0);
     const totalSaves = filteredPosts.reduce((s, p) => s + p.saves, 0);
-    const lastFollowers = filteredMetrics.length > 0 ? filteredMetrics[filteredMetrics.length - 1].followers : 0;
+    const lastFollowers = filteredMetrics.length > 0
+      ? filteredMetrics[filteredMetrics.length - 1].followers
+      : (account?.followers_count || 0);
     const firstFollowers = filteredMetrics.length > 0 ? filteredMetrics[0].followers : 0;
     const followersGrowth = firstFollowers > 0 ? ((lastFollowers - firstFollowers) / firstFollowers) * 100 : 0;
     const avgEngRate = filteredMetrics.length > 0
       ? filteredMetrics.reduce((s, m) => s + m.engagementRate, 0) / filteredMetrics.length
       : 0;
-
     return {
       totalReach, totalImpressions, totalEngagement, totalProfileVisits, totalWebClicks,
       totalLikes, totalSaves, lastFollowers, followersGrowth, avgEngRate,
     };
-  }, [filteredMetrics, filteredPosts]);
-
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-[#0f0f0f]">
-        <Header username={account?.username} followers={account?.followers_count} profilePic={account?.profile_picture_url} />
-        <LoadingState message={loadingMessage} progress={loadingProgress} />
-      </div>
-    );
-  }
+  }, [filteredMetrics, filteredPosts, account]);
 
   return (
     <div className="min-h-screen bg-[#0f0f0f]">
@@ -92,14 +81,24 @@ export default function App() {
         profilePic={account?.profile_picture_url}
       />
 
-      {usingMockData && (
+      {/* Sync status bar */}
+      {syncing && (
+        <div className="bg-blue-500/10 border-b border-blue-500/20 px-6 py-2">
+          <div className="max-w-7xl mx-auto flex items-center gap-2 text-blue-400 text-xs">
+            <RefreshCw size={12} className="animate-spin" />
+            <span>{syncMessage || 'Sincronizando dados do Instagram...'}</span>
+          </div>
+        </div>
+      )}
+
+      {usingMockData && !syncing && (
         <div className="bg-amber-500/10 border-b border-amber-500/20 px-6 py-2.5">
           <div className="max-w-7xl mx-auto flex items-center justify-between">
             <div className="flex items-center gap-2 text-amber-400 text-xs">
               <AlertCircle size={14} />
               <span>
                 {error
-                  ? 'Erro na API do Instagram — exibindo dados demonstrativos'
+                  ? 'Erro ao carregar dados reais — exibindo dados demonstrativos'
                   : 'Dados demonstrativos — configure as credenciais do Instagram para dados reais'}
               </span>
             </div>
